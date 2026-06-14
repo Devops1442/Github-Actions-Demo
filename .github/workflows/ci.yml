@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# This block silences the warning and forces Node 24 globally
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   code-scan:
     name: SonarQube Analysis
