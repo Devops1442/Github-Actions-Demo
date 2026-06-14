@@ -1,0 +1,72 @@
+name: Nginx DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  code-scan:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  build-scan-push:
+    name: Build, Scan & Push
+    needs: code-scan
+    runs-on: ubuntu-latest
+    # Required to push to GitHub Container Registry (GHCR)
+    permissions:
+      contents: read
+      packages: write 
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build an image from Dockerfile
+        run: |
+          docker build -t my-nginx-app:${{ github.sha }} .
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'my-nginx-app:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1' # Fails the pipeline if vulnerabilities are found
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and Push to GHCR
+        run: |
+          # Convert repository owner name to lowercase to avoid Docker reference errors
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_ID=ghcr.io/$REPO_OWNER/my-nginx-app
+          
+          docker tag my-nginx-app:${{ github.sha }} $IMAGE_ID:${{ github.sha }}
+          docker push $IMAGE_ID:${{ github.sha }}
+          
+          # Tag as latest for the main branch
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            docker tag my-nginx-app:${{ github.sha }} $IMAGE_ID:latest
+            docker push $IMAGE_ID:latest
+          fi
